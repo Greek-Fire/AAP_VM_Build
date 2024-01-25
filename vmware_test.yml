@@ -1,0 +1,165 @@
+---
+- name: Deploy VM from OVF and configure IP
+  hosts: localhost
+  gather_facts: no
+  vars:
+    #datacenter: "TNDC"
+    #cluster_name: "TNCL"
+    #datastore_name: "cloud (1)"
+    #content_library_name: 00-main #-tncl
+    #ovf_template_name: "autobuildrh7.lou.land"
+    #network_name: "VM Network"
+    name: "ansible-test1.lou.land"
+    location: hallas
+    organization: hallas
+    vm_ip: 192.168.2.49
+    #cluster_name: 'TNCL'
+    #network_name: 'VM Network'
+    #folder_name: test_folder
+    subnet: 192.168.2.0
+    operating_system: RH7
+    #gateway: 192.168.2.1
+    build: false
+
+  tasks:
+  - name: Create a VMware host in Satellite with EFI firmware and specific provisioning
+    redhat.satellite.subnet_info:
+      username: "{{ satellite_username | default(omit) }}"
+      password: "{{ satellite_password | default(omit) }}"
+      server_url: "{{ satellite_server_url | default(omit) }}"
+      validate_certs: "{{ satellite_validate_certs | default(omit) }}"
+      name: "{{ subnet }}"
+    register: subnet_info
+
+  - name: Collect OS Level Facts
+    uri:
+      url: "{{ satellite_server_url }}/api/operatingsystems?search=name~{{ operating_system }}"
+      method: GET
+      user: "{{ satellite_username }}"
+      password: "{{ satellite_password }}"
+      force_basic_auth: yes
+      validate_certs: false
+      return_content: yes
+    register: os_info
+
+  - name: Collect OS parameters
+    uri:
+      url: "{{ satellite_server_url }}/api/operatingsystems/{{ os_id }}"
+      method: GET
+      user: "{{ satellite_username }}"
+      password: "{{ satellite_password }}"
+      force_basic_auth: yes
+      validate_certs: false
+      return_content: yes
+    register: os_parameters
+    vars:
+      os_id: "{{ os_info['json']['results'][0]['id'] }}"
+
+  - name: Set vm guest facts.
+    set_fact:
+      content_library_name: "{{ (subnet_info['subnet']['parameters'] | selectattr('name','eq','content_library') | first )['value'] }}"
+      vm_template_name: "{{ (os_parameters['json']['parameters'] | selectattr('name','eq','vm_template') | first)['value'] }}"
+      folder_name: "{{ folder_name | default('ansible_test') }}"
+      vm_name: "{{ name }}"
+      network_name: "{{ (subnet_info['subnet']['parameters'] | selectattr('name','eq','network') | first )['value'] }}"
+      cluster_name: "{{ (subnet_info['subnet']['parameters'] | selectattr('name','eq','cluster') | first )['value'] }}"
+      datastore_name: "{{ (subnet_info['subnet']['parameters'] | selectattr('name','eq','datastore') | first )['value'] }}"
+      
+  - block:
+    - name: List all Local Content Library
+      vmware.vmware_rest.content_locallibrary_info:
+      register: content_libraries
+
+    - name: Get Content Library ID
+      set_fact:
+        content_library_id: "{{ temp_cl[0]['id']}}"
+      vars:
+        temp_cl:  "{{ content_libraries['value'] | selectattr('name','eq',content_library_name) }}"
+    when: content_library_name.startswith('00-')
+
+  - block:
+    - name: List all Local Content Library
+      vmware.vmware_rest.content_subscribedlibrary_info:
+      register: content_libraries
+
+    - name: Get Content Library ID
+      set_fact:
+        content_library_id: "{{ temp_cl[0]['id'] }}"
+      vars:
+        temp_cl:  "{{ content_libraries['value'] | selectattr('name','eq',content_library_name) }}"
+    when: content_library_name.startswith('01-')
+
+  - name: Get Content Library Item ID
+    vmware.vmware_rest.content_library_item_info:
+      library_id: "{{ content_library_id }}"
+    register: vm_template_item
+
+  - name: Build a list of all the folders with the type VIRTUAL_MACHINE and called vm
+    vmware.vmware_rest.vcenter_folder_info:
+      filter_type: VIRTUAL_MACHINE
+      filter_names:
+      - "{{ folder_name }}"
+    register: my_folders
+
+  - name: Build a list of all the datastores
+    vmware.vmware_rest.vcenter_datastore_info:
+    register: all_the_datastores
+
+  - name: Retrieve details about the first cluster
+    vmware.vmware_rest.vcenter_cluster_info:
+    register: all_clusters_info
+
+  - name: Get the network id
+    vmware.vmware_rest.vcenter_network_info:
+    register: net_info
+
+  - name: Get the network id
+    set_fact:
+      network_id: "{{ (net_info['value'] | selectattr('name','eq',network_name) | first)['network'] }}"
+      network_type: "{{ (net_info['value'] | selectattr('name','eq',network_name) | first)['type'] }}"
+
+  - name: Get the datastore id
+    set_fact:
+      datastore_id: "{{ (all_the_datastores['value'] | selectattr('name','eq',datastore_name) | first)['datastore'] }}"
+
+  - name: Get the cluster id
+    set_fact:
+      cluster_id: "{{ (all_clusters_info['value'] | selectattr('name','eq',cluster_name) | first)['cluster'] }}"
+
+  - name: grab content library item id
+    set_fact:
+      vm_template_item_id: "{{ (vm_template_item['value'] | selectattr('name','eq',vm_template_name) | first)['id'] }}"
+
+  - name: Get the folder id
+    set_fact:
+      folder_id: "{{ (my_folders['value'] | selectattr('name','eq', folder_name) | first)['folder'] }}"
+
+  - name: Deploy a new VM based on the template
+    vmware.vmware_rest.vcenter_vmtemplate_libraryitems:
+      name: "{{ vm_name }}" 
+      library: "{{ content_library_id }}"
+      template_library_item: '{{ vm_template_item_id }}'
+      session_timeout: 10000
+      disk_storage:
+        datastore: "{{ datastore_id }}"
+      placement:
+        cluster: "{{ cluster_id}}"
+        folder: "{{ folder_id }}"
+      state: deploy
+    register: new_vm
+    when: not vm_id
+
+  - set_fact:
+      vm_id: "{{ new_vm['value'] }}"
+    when: not vm_id
+  
+  - name: Turn the NIC's start_connected flag on
+    vmware.vmware_rest.vcenter_vm_hardware_ethernet:
+      nic: "{{ network_id }}"
+      state: present
+      vm: "{{ vm_id }}"
+      start_connected: true
+      type: VMXNET3
+      backing: 
+        type: "{{ network_type }}"
+        network: "{{ network_id }}"
