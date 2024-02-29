@@ -1,0 +1,11 @@
+    - name: Search for IP address in VMware
+      vcenter_ip_search:
+        ip_address: "192.168.2.57"
+        vcenter_host: "vcenter.lou.land"
+        username: "administrator@lou.landd"
+        password: "Gr33k*G0d7"
+        ssl_verify: no
+      register: search_result
+
+    - debug:
+        msg: "{{ search_result.message }}"

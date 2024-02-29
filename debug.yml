@@ -1,0 +1,42 @@
+---
+- name: Deploy VM from OVF and configure IP
+  hosts: localhost
+  gather_facts: no
+  vars:
+    #datacenter: "TNDC"
+    #cluster_name: "TNCL"
+    #datastore_name: "cloud (1)"
+    #content_library_name: 00-main #-tncl
+    #ovf_template_name: "autobuildrh7.lou.land"
+    #network_name: "VM Network"
+    name: "ansible-test1.lou.land"
+    location: hallas
+    organization: hallas
+    vm_ip: 192.168.2.49
+    #cluster_name: 'TNCL'
+    #network_name: 'VM Network'
+    #folder_name: test_folder
+    subnet: 192.168.2.0
+    operating_system: RH7
+    #gateway: 192.168.2.1
+    build: false
+
+  tasks:
+  - include_tasks: lookup.yml
+  - name: Get the dvswitch called my-portgroup
+    vmware.vmware_rest.vcenter_network_info:
+    register: my_portgroup
+  - name: Build a list of all the datastores
+    vmware.vmware_rest.vcenter_datastore_info:
+    register: all_the_datastores
+  - name: Build a list of all the clusters
+    vmware.vmware_rest.vcenter_cluster_info:
+    register: all_the_clusters
+  - vmware.vmware_rest.vcenter_vm_info:
+      filter_names: ['autobuildrh8.lou.land']
+    register: vm_info
+
+  - debug: var=my_portgroup
+  - debug: var=all_the_datastores
+  - debug: var=all_the_clusters
+  - debug: var=vm_info
